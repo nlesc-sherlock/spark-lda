@@ -94,22 +94,23 @@ object ScalaLDA {
       .run(cachedCorpus)
 
     // Save as CSV for other groups
-    saveAsCsv(params.output, ldaModel.topicsMatrix)
+    saveAsCsv(sc, params.output, ldaModel.topicsMatrix)
 
     // Save as parquet for further processing
     //    ldaModel.save(sc, "myLDAModel")
   }
 
-  def saveAsCsv(filename: String, matrix: Matrix) = {
-    val wr = new BufferedWriter(new FileWriter(filename))
-    for (i : Int <- 0 until matrix.numCols) {
-      for (j : Int <- 0 until matrix.numRows) {
-        if (j > 0) wr.write(",")
-        wr.write(matrix(j, i).toString)
-      }
-      wr.write("\n")
-    }
-    wr.close()
+  def saveAsCsv(sc: SparkContext, filename: String, matrix: Matrix) = {
+    sc.makeRDD(Range(0, matrix.numCols), 1)
+      .map(i => {
+        var str = ""
+        for (j : Int <- Range(0, matrix.numRows)) {
+          if (j > 0) str += ","
+          str += matrix(j, i)
+        }
+        str
+      })
+      .saveAsTextFile(filename)
   }
 
   def parseCustomCsv(data: RDD[String]) : RDD[(Long, Vector)] = {
