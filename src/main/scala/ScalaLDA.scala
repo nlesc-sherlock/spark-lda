@@ -1,5 +1,7 @@
+import java.io.{PrintWriter, BufferedWriter, FileWriter}
+
 import org.apache.spark.mllib.clustering.{LDA, DistributedLDAModel}
-import org.apache.spark.mllib.linalg.{SparseVector, Vector}
+import org.apache.spark.mllib.linalg.{SparseVector, Vector, Matrix}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.{SparkContext, SparkConf}
 
@@ -19,20 +21,23 @@ object ScalaLDA {
     // Cluster the documents into three topics using LDA
     val ldaModel = new LDA().setK(n_topics).run(cachedCorpus)
 
-    // Output topics. Each is a distribution over words (matching word count vectors)
-    // TODO: remove, debug only
-    println("Learned topics (as distributions over vocab of " + ldaModel.vocabSize + " words):")
-    val topics = ldaModel.topicsMatrix
-    for (topic <- Range(0, n_topics)) {
-      print("Topic " + topic + ":")
-      for (word <- Range(0, ldaModel.vocabSize)) { print(" " + topics(word, topic)); }
-      println()
-    }
+    // Save as CSV for other groups
+    saveAsCsv("data/lda_matrix_" + n_topics + ".csv", ldaModel.topicsMatrix)
 
-    // TODO: we could write this to csv or something so it's usable for other teams
-    // Save and load model.
-    ldaModel.save(sc, "myLDAModel")
-    val sameModel = DistributedLDAModel.load(sc, "myLDAModel")
+    // Save as parquet for further processing
+    //    ldaModel.save(sc, "myLDAModel")
+  }
+
+  def saveAsCsv(filename: String, matrix: Matrix) = {
+    val wr = new BufferedWriter(new FileWriter(filename))
+    for (i : Int <- 0 until matrix.numCols) {
+      if (i > 0) wr.write("\n")
+      for (j : Int <- 0 until matrix.numRows) {
+        if (j > 0) wr.write(",")
+        wr.write(matrix(j, i).toString)
+      }
+    }
+    wr.close()
   }
 
   def parseCustomCsv(data: RDD[String]) : RDD[(Long, Vector)] = {
