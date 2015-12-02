@@ -1,4 +1,4 @@
-group 'nl.esciencecenter.hdtest'
+group 'nl.esciencecenter.spark-lda'
 version '0.1-SNAPSHOT'
 
 apply plugin: 'java'
