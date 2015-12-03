@@ -12,6 +12,7 @@ object ScalaLDASeq {
   private case class Params(
      input: String = null,
      output: String = null,
+     fraction: Double = 0.01,
      k: Int = 20,
      maxIterations: Int = 10,
      docConcentration: Double = -1,
@@ -25,6 +26,9 @@ object ScalaLDASeq {
 
     val parser = new OptionParser[Params]("ScalaLDASeq") {
       head("ScalaLDASeq: an LDA app for plain text data.")
+      opt[Double]("fraction")
+        .text(s"Fraction of the sequence file. default: ${defaultParams.fraction}")
+        .action((x, c) => c.copy(fraction = x))
       opt[Int]("k")
         .text(s"number of topics. default: ${defaultParams.k}")
         .action((x, c) => c.copy(k = x))
@@ -72,7 +76,7 @@ object ScalaLDASeq {
 
     // Cache for faster processing
     val (corpus, corpusLookup, vocabArray, actualNumTokens) =
-      preprocess(sc, params.input, params.vocabSize, params.stopwordFile)
+      preprocess(sc, params.input, params.fraction, params.vocabSize, params.stopwordFile)
     
     val cachedCorpus = corpus.cache()
 
@@ -107,13 +111,14 @@ object ScalaLDASeq {
   private def preprocess(
       sc: SparkContext,
       path: String,
+      fraction: Double,
       vocabSize: Int,
       stopwordFile: String): (RDD[(Long, Vector)], RDD[(Long, String)], Array[String], Long) = {
     // Get dataset of document texts
     // One document per line in each text file. If the input consists of many small files,
     // this can result in a large number of small partitions, which can degrade performance.
     // In this case, consider using coalesce() to create fewer, larger partitions.
-    val data = sc.sequenceFile[String, String](path)
+    val data = sc.sequenceFile[String, String](path).sample(false, fraction)
 
     val lookup = data.zipWithIndex().map{ case ((path, text), id) => id -> path}
 
