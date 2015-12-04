@@ -57,7 +57,6 @@ object ScalaLDA {
     parser.parse(args, defaultParams).map { params =>
       run(params)
     }.getOrElse {
-      parser.showUsageAsError
       sys.exit(1)
     }
   }

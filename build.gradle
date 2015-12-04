@@ -3,6 +3,7 @@ version '0.1-SNAPSHOT'
 
 apply plugin: 'scala'
 apply plugin: 'java'
+sourceCompatibility = '1.7'
 
 repositories {
     mavenCentral()
@@ -17,21 +18,20 @@ dependencies {
     provided group: 'org.apache.spark', name: 'spark-core_2.10', version: '1.5.2'
     provided group: 'org.apache.spark', name: 'spark-mllib_2.10', version: '1.5.2'
     compile group: 'com.github.scopt', name: 'scopt_2.10', version: '3.3.0'
+    compile group: 'javax.mail', name: 'javax.mail-api', version: '1.5.4'
+    compile group: 'edu.stanford.nlp', name: 'stanford-corenlp', version: '3.4.1'
+    compile group: 'edu.stanford.nlp', name: 'stanford-corenlp', version: '3.4.1', classifier: 'models'
+    compile group: 'org.apache.lucene', name: 'lucene-analyzers-common', version: '5.3.1'
+    compile group: 'org.apache.commons', name: 'commons-email', version: '1.4'
 }
 
 task wrapper(type: Wrapper) {
     gradleVersion = '2.9'
 }
 
-jar {
-    dependsOn configurations.runtime
-    from {
-        (configurations.runtime - configurations.provided).collect {
-            it.isDirectory() ? it : zipTree(it)
-        }
-    } {
-        exclude "META-INF/*.SF"
-        exclude "META-INF/*.DSA"
-        exclude "META-INF/*.RSA"
-    }
+task downloadDependencies(type: Copy) {
+    from (configurations.runtime.files - configurations.provided.files)
+    into file('lib/')
 }
+jar.dependsOn downloadDependencies
+
