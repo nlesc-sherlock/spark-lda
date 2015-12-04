@@ -10,15 +10,15 @@ First, install Java, Scala 2.10 and Spark on the system. Make sure that environm
 
 ## Usage
 
-First define a function to join jars together and save your spark configuration
+To run it at the root of spark-lda, first define a function to join jars together and save your spark configuration
 ```shell
 function join() {
     local IFS=$1
     shift
     echo "$*"
 }
-myspark=$SPARK_HOME/bin/spark-submit --master yarn-cluster --num-executors 15 --jars $(join ',' libs/*.jar)
-myjar=<path>/spark-lda/build/libs/ScalaLDA-0.1-SNAPSHOT.jar
+myspark=$SPARK_HOME/bin/spark-submit --master yarn-cluster --num-executors 15 --jars $(join ',' `pwd`/libs/*.jar)
+myjar=`pwd`/libs/ScalaLDA-0.1-SNAPSHOT.jar
 ```
 
 Then to preprocess email, run:
