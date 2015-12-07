@@ -179,18 +179,6 @@ object EmailParser {
         }
       })
       .saveAsTextFile(params.output) // write
-
-//    val bagOfWords = tokens.map(doc => {
-//      val tokenMap = mutable.Map[String, Int]()
-//      for (token <- doc.tokens) {
-//        tokenMap(token) = tokenMap.getOrElse(token, 0) + 1
-//      }
-//      val words = ListBuffer[Int]()
-//      val counts = ListBuffer[Int]()
-//      for ((word, count) <- tokenMap) {
-//        words += dictionary.
-//      }
-//    })
   }
 
   def bagOfWords(tokens : RDD[TokenizedDocument], dictionary : RDD[DictionaryItem]): RDD[BagOfWords] = {
