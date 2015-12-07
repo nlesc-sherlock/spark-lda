@@ -1,6 +1,8 @@
+import java.io.{DataOutput, DataInput}
 import java.util.Properties
 import javax.mail.Session
 import org.apache.commons.mail.util.{MimeMessageUtils, MimeMessageParser}
+import org.apache.hadoop.io.Writable
 
 import scala.util.matching.Regex
 import collection.JavaConversions._
@@ -23,11 +25,47 @@ case class EmailContents(id: Long, contents: String)
 case class TokenizedDocument(id: Long, tokens: Array[String])
 case class RawDocument(id: Long, path: String, document: String)
 case class BagOfWords(id: Long, words: Array[Int], counts: Array[Int])
+case class EmailMetadata(var id: Long, var path: String, var message_id: String, var user: String,
+                         var date: java.util.Date, var from: String, var to: Array[String], var cc: Array[String],
+                         var bcc: Array[String], var subject: String) extends Writable {
+  override def write(out: DataOutput): Unit = {
+    out.writeLong(id)
+    out.writeUTF(path)
+    out.writeUTF(message_id)
+    out.writeUTF(user)
+    out.writeLong(date.getTime)
+    out.writeUTF(from)
+    writeUTFArray(out, to)
+    writeUTFArray(out, cc)
+    writeUTFArray(out, bcc)
+    out.writeUTF(subject)
+  }
+
+  private def readUTFArray(in: DataInput): Array[String] = Array[String]().padTo(in.readInt, null).map(v => in.readUTF)
+  private def writeUTFArray(out: DataOutput, arr: Array[String]): Unit = {
+    out.writeInt(arr.size)
+    arr.map(s => out.writeUTF(s))
+  }
+
+  override def readFields(in: DataInput): Unit = {
+    id = in.readLong
+    path = in.readUTF
+    message_id = in.readUTF
+    user = in.readUTF
+    date = new java.util.Date(in.readLong)
+    from = in.readUTF
+    to = readUTFArray(in)
+    cc = readUTFArray(in)
+    bcc = readUTFArray(in)
+    subject = in.readUTF
+  }
+}
 
 object EmailParser {
   private case class Params(input: String = null,
                             output: String = null,
                             dictionary: String = null,
+                            metadata: String = null,
                             above: Double = 0.5,
                             below: Int = 5,
                             keep_n: Int = 1000000)
@@ -46,6 +84,9 @@ object EmailParser {
       opt[Int]("keep_n")
         .text(s"keep the n most frequent words, after the previous step. default: ${defaultParams.keep_n}")
         .action((x, c) => c.copy(keep_n = x))
+      opt[String]("metadata")
+        .text("output metadata sequence file with (document id, EmailMetadata)")
+        .action((x, c) => c.copy(metadata = x))
       arg[String]("<input>")
         .text("input directory with a number of plain text emails.")
         .required()
@@ -86,7 +127,7 @@ object EmailParser {
       .zipWithIndex()
       .map(v => RawDocument(v._2, v._1._1, v._1._2))
 
-    val emails = parseEmail(documents)
+    val emails = parseEmail(documents).cache()
     val emailContents = emails.map(email => {
       if (email.message.hasPlainContent) {
         EmailContents(email.id, email.message.getPlainContent)
@@ -94,6 +135,25 @@ object EmailParser {
         EmailContents(email.id, email.message.getHtmlContent)
       }
     })
+
+    if (params.metadata != null) {
+      val metadata = emails.map(email => {
+        var date = email.message.getMimeMessage.getSentDate
+        if (date == null) {
+          date = email.message.getMimeMessage.getReceivedDate
+        }
+        val split_path = email.path.split("[/\\\\]")
+        // This is purely a heuristic, a user may not be the first element of the path.
+        val user = if (split_path(0) == ".") split_path(1) else split_path(0)
+        val from = email.message.getFrom
+        val to = email.message.getTo.toArray(Array[String]().padTo(email.message.getTo.size, null))
+        val cc = email.message.getCc.toArray(Array[String]().padTo(email.message.getCc.size, null))
+        val bcc = email.message.getBcc.toArray(Array[String]().padTo(email.message.getBcc.size, null))
+        val subject = email.message.getSubject
+        val message_id = email.message.getMimeMessage.getMessageID
+        (email.id, EmailMetadata(email.id, email.path, message_id, user, date, from, to, cc, bcc, subject))
+      }).saveAsSequenceFile(params.metadata)
+    }
 
     val filtered = filter(emailContents)
     val tokens = tokenizeStanford(filtered)
@@ -238,6 +298,7 @@ object EmailParser {
     emails.mapPartitions(
       emailIterator => {
         val pipeline = new StanfordCoreNLP(props)
+
         emailIterator.map(email => {
           val document : Annotation = new Annotation(email.contents)
           pipeline.annotate(document)

@@ -1,5 +1,3 @@
-import java.io.{PrintWriter, BufferedWriter, FileWriter}
-
 import org.apache.spark.mllib.clustering.{EMLDAOptimizer, OnlineLDAOptimizer, LDA, DistributedLDAModel}
 import org.apache.spark.mllib.linalg.{SparseVector, Vector, Vectors, Matrix}
 import org.apache.spark.rdd.RDD
