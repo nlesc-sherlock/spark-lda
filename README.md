@@ -30,3 +30,20 @@ To run the LDA algorithm on `--k topics`:
 ```shell
 $myspark --class ScalaLDA $myjar --k 10 data/bow.csv data/lda.csv
 ```
+### Note
+All the locally-compiled jars need to be copied on the Spark machine. Currently the files are organized:
+```shell
+/home/shelly/spark-lda/
+                      /ScalaLDA-0.1-SNAPSHOT.jar
+                      /lib/*.jar
+                      /data/enron_data.seq
+                      /test.sh
+```
+The input data is expected in Sequence file format. The easiest way to compress it is using the
+[forqlift] (www.exmachinatech.net/projects/forqlift) tool.
+The data needs to be registered with hadoop as well:
+```shell
+$hdfs dfs -put <localdata> <hdfsdata>
+```
+
+
