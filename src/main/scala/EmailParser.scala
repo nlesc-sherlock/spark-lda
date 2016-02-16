@@ -119,9 +119,9 @@ object EmailParser {
     val sc = new SparkContext(conf)
 
     // Sequence file of path -> contents
-    // val data : RDD[(String, String)] = sc.sequenceFile(params.input)
+    val data : RDD[(String, String)] = sc.sequenceFile(params.input)
     // Testing with single directory
-    val data : RDD[(String, String)] = sc.wholeTextFiles(params.input)
+    //val data : RDD[(String, String)] = sc.wholeTextFiles(params.input)
 
     val documents = data
       .zipWithIndex()
@@ -206,6 +206,7 @@ object EmailParser {
       val s : Session = Session.getDefaultInstance(new Properties())
       val m = MimeMessageUtils.createMimeMessage(s, raw.document)
       val p = new MimeMessageParser(m)
+      //System.setProperty("mail.mime.multipart.ignoreexistingboundaryparameter", "true");
       p.parse()
       ParsedEmail(raw.id, raw.path, p)
     })
