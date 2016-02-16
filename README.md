@@ -40,7 +40,9 @@ All the locally-compiled jars need to be copied on the Spark machine. Currently 
                       /test.sh
 ```
 The input data is expected in Sequence file format. The easiest way to compress it is using the
-[forqlift] (www.exmachinatech.net/projects/forqlift) tool.
+[forqlift] (www.exmachinatech.net/projects/forqlift) tool. See [here](https://github.com/nlesc-sherlock/analyzing-corpora#step-1---the-original-data) for more information).
+
+
 The data needs to be registered with hadoop as well:
 ```shell
 $hdfs dfs -put <localdata> <hdfsdata>
