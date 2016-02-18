@@ -57,8 +57,6 @@ object ScalaLDA {
     }
   }
   def run(params: Params) {
-    val n_topics = 100
-
     // Look at configuration to determine parallelism and run node
     val conf = new SparkConf()
       .setAppName("ScalaLDA")

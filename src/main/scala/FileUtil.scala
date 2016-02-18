@@ -21,12 +21,12 @@ object FileUtil {
     val header = data.take(2)(1).split(' ')
     // The second line contains the number of values
     val n_words = header(0).toInt
-    val n_docs = header(1).toLong
+    // val n_docs = header(1).toLong
 
     // Parse each row except the header separately
-    return data
+    data
       .mapPartitionsWithIndex((idx, part) => if (idx == 0) part.drop(2) else part)
-      .filter(!_.isEmpty())
+      .filter(!_.isEmpty)
       .map(s => {
         val values = s.trim.split(';')
         val doc_id = values(0).toLong
@@ -40,9 +40,9 @@ object FileUtil {
     // Parse the header and disregard the first line (%%MatrixMarket etc)
     val header = data.take(2)(1).split(' ')
     // The second line contains the number of values
-    val n_docs = header(0).toLong
+    // val n_docs = header(0).toLong
     val n_words = header(1).toInt
-    val n_counts = header(2).toLong
+    // val n_counts = header(2).toLong
 
     // Parse each row except the header separately
     val sparseRows : RDD[(Long, (Int, Double))] = data
@@ -53,16 +53,15 @@ object FileUtil {
       })
 
     // Combine the rows by document ID, and store the words and counts in Arrays
-    return sparseRows
+    sparseRows
       .groupByKey()
       .map(x => {
         val doc_id = x._1
-        val iter = x._2
-        val cts = Array[Double]().padTo(iter.size, 0.0)
-        val wds = Array[Int]().padTo(iter.size, 0)
+        val word_count_iterator = x._2
+        val cts = Array[Double]().padTo(word_count_iterator.size, 0.0)
+        val wds = Array[Int]().padTo(word_count_iterator.size, 0)
         var i = 0
-        var ct : (Int, Double) = null
-        for (ct <- iter) {
+        for (ct : (Int, Double) <- word_count_iterator) {
           wds(i) = ct._1
           cts(i) = ct._2
           i += 1
