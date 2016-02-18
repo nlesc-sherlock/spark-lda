@@ -24,6 +24,12 @@ To run the LDA algorithm on `--k topics`:
 ```shell
 spark-submit --class ScalaLDA $myjar --k 10 data/bow.csv data/lda.csv
 ```
+
+To find the topic proportions of each document, run:
+```shell
+spark-submit --class ApplyLDA $myjar data/lda.csv.model data/bow.csv data/document_topics.csv
+```
+
 ### Note
 All the locally-compiled jars need to be copied on the Spark machine. Currently the files are organized:
 ```shell
