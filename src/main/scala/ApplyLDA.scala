@@ -1,12 +1,7 @@
-import org.apache.spark.{SparkContext, SparkConf}
-
-import org.apache.spark.mllib.clustering.{LDA, DistributedLDAModel}
-import org.apache.spark.mllib.linalg.Vectors
-
-import org.apache.spark.mllib.linalg.{SparseVector, Vector, Matrix}
-import org.apache.spark.rdd.RDD
-
+import org.apache.spark.mllib.clustering.DistributedLDAModel
+import org.apache.spark.{SparkConf, SparkContext}
 import scopt.OptionParser
+import FileUtil._
 
 object ApplyLDA {
   private case class Params(
@@ -57,26 +52,6 @@ object ApplyLDA {
     val corpus = parseCustomCsv(data)
 
     val res = localModel.topicDistributions(corpus)
-    res.saveAsTextFile("neoResponse.txt")
-  }
-
-  def parseCustomCsv(data: RDD[String]) : RDD[(Long, Vector)] = {
-    // Parse the header and disregard the first line (comment)
-    val header = data.take(2)(1).split(' ')
-    // The second line contains the number of values
-    val n_words = header(0).toInt
-    val n_docs = header(1).toLong
-
-    // Parse each row except the header separately
-    return data
-      .mapPartitionsWithIndex((idx, part) => if (idx == 0) part.drop(2) else part)
-      .filter(!_.isEmpty())
-      .map(s => {
-        val values = s.trim.split(';')
-        val doc_id = values(0).toLong
-        val words = values(1).split(',').map(_.toInt)
-        val counts = values(2).split(',').map(_.toDouble)
-        (doc_id, new SparseVector(n_words, words, counts))
-      })
+    res.saveAsTextFile(outFile)
   }
 }
