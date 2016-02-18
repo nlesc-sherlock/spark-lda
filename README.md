@@ -5,7 +5,7 @@
 First, install Java, Scala 2.10 and Spark on the system. Make sure that environment variables `$JAVA_HOME`, `$SCALA_HOME` and `$SPARK_HOME` are set.
 
 ```shell
-./gradlew build
+./gradlew shadowJar
 ```
 
 ## Usage
