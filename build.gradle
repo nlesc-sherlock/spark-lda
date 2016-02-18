@@ -1,6 +1,11 @@
 group 'nl.esciencecenter.spark-lda'
 version '0.1-SNAPSHOT'
 
+ext {
+  scalaVersion = '2.10'
+  sparkVersion = '1.5.2'
+}
+
 apply plugin: 'scala'
 apply plugin: 'java'
 sourceCompatibility = '1.7'
@@ -15,9 +20,9 @@ configurations {
 }
 
 dependencies {
-    provided group: 'org.apache.spark', name: 'spark-core_2.10', version: '1.5.2'
-    provided group: 'org.apache.spark', name: 'spark-mllib_2.10', version: '1.5.2'
-    compile group: 'com.github.scopt', name: 'scopt_2.10', version: '3.3.0'
+    provided group: 'org.apache.spark', name: "spark-core_${scalaVersion}", version: sparkVersion
+    provided group: 'org.apache.spark', name: "spark-mllib_${scalaVersion}", version: sparkVersion
+    compile group: 'com.github.scopt', name: "scopt_${scalaVersion}", version: '3.3.0'
     compile group: 'javax.mail', name: 'javax.mail-api', version: '1.5.4'
     compile group: 'edu.stanford.nlp', name: 'stanford-corenlp', version: '3.4.1'
     compile group: 'edu.stanford.nlp', name: 'stanford-corenlp', version: '3.4.1', classifier: 'models'
@@ -34,4 +39,3 @@ task downloadDependencies(type: Copy) {
     into file('lib/')
 }
 jar.dependsOn downloadDependencies
-

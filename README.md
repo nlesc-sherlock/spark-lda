@@ -18,7 +18,7 @@ function join() {
     echo "$*"
 }
 myspark=$SPARK_HOME/bin/spark-submit --master yarn-cluster --num-executors 15 --jars $(join ',' `pwd`/libs/*.jar)
-myjar=`pwd`/libs/ScalaLDA-0.1-SNAPSHOT.jar
+myjar=`pwd`/build/libs/ScalaLDA-0.1-SNAPSHOT.jar
 ```
 
 Then to preprocess email, run:
