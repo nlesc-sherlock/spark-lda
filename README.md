@@ -12,23 +12,17 @@ First, install Java, Scala 2.10 and Spark on the system. Make sure that environm
 
 To run it at the root of spark-lda, first define a function to join jars together and save your spark configuration
 ```shell
-function join() {
-    local IFS=$1
-    shift
-    echo "$*"
-}
-myspark=$SPARK_HOME/bin/spark-submit --master yarn-cluster --num-executors 15 --jars $(join ',' `pwd`/libs/*.jar)
-myjar=`pwd`/build/libs/ScalaLDA-0.1-SNAPSHOT.jar
+myjar="$(pwd)/build/libs/ScalaLDA-0.1-SNAPSHOT-all.jar"
 ```
 
 Then to preprocess email, run:
 ```shell
-$myspark --class EmailParser $myjar data/email/ data/dic.csv data/bow.csv
+spark-submit --class EmailParser $myjar data/email/ data/dic.csv data/bow.csv
 ```
 
 To run the LDA algorithm on `--k topics`:
 ```shell
-$myspark --class ScalaLDA $myjar --k 10 data/bow.csv data/lda.csv
+spark-submit --class ScalaLDA $myjar --k 10 data/bow.csv data/lda.csv
 ```
 ### Note
 All the locally-compiled jars need to be copied on the Spark machine. Currently the files are organized:
