@@ -21,7 +21,7 @@ import scala.collection.mutable.ListBuffer
 import scala.util.matching.Regex
 
 case class DictionaryItem(id: Int, word: String, occurrences: Long)
-case class ParsedEmail(id: Long, path: String, message: MimeMessageParser)
+case class ParsedEmail(id: Long, path: String, message: MimeMessageParser, content: String)
 case class EmailContents(id: Long, contents: String)
 case class TokenizedDocument(id: Long, tokens: Array[String])
 case class RawDocument(id: Long, path: String, document: String)
@@ -128,14 +128,7 @@ object EmailParser {
       .zipWithIndex()
       .map(v => RawDocument(v._2, v._1._1, v._1._2))
 
-    val emails = parseEmail(documents).cache()
-    val emailContents = emails.map(email => {
-      if (email.message.hasPlainContent) {
-        EmailContents(email.id, email.message.getPlainContent)
-      } else {
-        EmailContents(email.id, email.message.getHtmlContent)
-      }
-    })
+    val emails = parseEmail(documents)
 
     if (params.metadata != null) {
       emails.map(email => {
@@ -146,10 +139,10 @@ object EmailParser {
         val split_path = email.path.split("[/\\\\]")
         // This is purely a heuristic, a user may not be the first element of the path.
         val user = if (split_path(0) == ".") split_path(1) else split_path(0)
-        val from = email.message.getFrom
-        val to = email.message.getTo.toArray(Array[String]().padTo(email.message.getTo.size, null))
-        val cc = email.message.getCc.toArray(Array[String]().padTo(email.message.getCc.size, null))
-        val bcc = email.message.getBcc.toArray(Array[String]().padTo(email.message.getBcc.size, null))
+        val from = try { email.message.getFrom } catch { case _ : AddressException => "" }
+        val to = try { getAddresses(email.message.getTo) } catch { case _ : AddressException => Array[String]() }
+        val cc = try { getAddresses(email.message.getCc) } catch { case _ : AddressException => Array[String]() }
+        val bcc = try { getAddresses(email.message.getBcc) } catch { case _ : AddressException => Array[String]() }
         val subject = email.message.getSubject
         val message_id = email.message.getMimeMessage.getMessageID
         (email.id, EmailMetadata(email.id, email.path, message_id, user, date, from, to, cc, bcc, subject))
@@ -203,13 +196,49 @@ object EmailParser {
     })
   }
   def parseEmail(data: RDD[RawDocument]) : RDD[ParsedEmail] = {
+    // Regular expressions for custom MIME parsing (due to malformed headers)
+    val boundaryRegex = new Regex("Content-Type: (?i)(?:multipart)/.*;\\s*boundary=\"(.*)\"")
+    val textPartRegex = new Regex("Content-Type: ((?i)(?:text)/)")
+    // MIME headers end with double line ending. According to the spec, this should be
+    // \r\r but since we already have a malformed header, we accept any line endings.
+    val endOfHeader = new Regex("\\n{2}|\\r{2}|(\\n\\r){2}|(\\r\\n){2}")
+
     data.map( raw => {
       val s : Session = Session.getDefaultInstance(new Properties())
       val m = MimeMessageUtils.createMimeMessage(s, raw.document)
       val p = new MimeMessageParser(m)
-      //System.setProperty("mail.mime.multipart.ignoreexistingboundaryparameter", "true");
       p.parse()
-      ParsedEmail(raw.id, raw.path, p)
+
+      val content = if (p.hasPlainContent) {
+        p.getPlainContent
+      } else if (p.hasHtmlContent) {
+        p.getHtmlContent
+      } else ""
+
+      var parts = Array[String](content)
+
+      // remove all boundaries
+      boundaryRegex.findAllMatchIn(content).foreach(
+        m => {
+          parts = parts.flatMap(_.split(Pattern.quote("--" + m.group(1))))
+        }
+      )
+
+      // if the headers are malformed, make sure we don't include any attachments
+      // by doing the MIME multipart splitting manually.
+      val body : String = parts.map(part =>
+        // only match text MIME parts
+        textPartRegex.findFirstIn(part) match {
+          case Some(_) => endOfHeader.findFirstMatchIn(part) match {
+            // everything after the header is content
+            case Some(eh) => part.substring(eh.end)
+            case None => "" // there is no end of header
+          }
+          case None => "" // content type is not text/*
+        }
+      ).mkString(" ") // concatenate all text
+
+      ParsedEmail(raw.id, raw.path, p, body)
     })
   }
 
@@ -334,5 +363,10 @@ object EmailParser {
       .zipWithIndex() // give each word a unique index
       .map(v => DictionaryItem(v._2.toInt, v._1._1, v._1._2)) // map it to the correct format
       .cache() // for later use
+  }
+
+  def getAddresses(list : java.util.List[Address]) : Array[String] = {
+    list.toArray(Array[Address]().padTo(list.length, null))
+      .map(_.toString)
   }
 }
