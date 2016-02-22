@@ -44,8 +44,8 @@ case class EmailMetadata(var id: Long, var path: String, var message_id: String,
 
   private def readUTFArray(in: DataInput): Array[String] = Array[String]().padTo(in.readInt, null).map(v => in.readUTF)
   private def writeUTFArray(out: DataOutput, arr: Array[String]): Unit = {
-    out.writeInt(arr.size)
-    arr.map(s => out.writeUTF(s))
+    out.writeInt(arr.length)
+    arr.foreach(out.writeUTF(_))
   }
 
   override def readFields(in: DataInput): Unit = {
@@ -138,7 +138,7 @@ object EmailParser {
     })
 
     if (params.metadata != null) {
-      val metadata = emails.map(email => {
+      emails.map(email => {
         var date = email.message.getMimeMessage.getSentDate
         if (date == null) {
           date = email.message.getMimeMessage.getReceivedDate
@@ -188,9 +188,9 @@ object EmailParser {
 
     documentWords.join(wordLookup)
       .map(occurrence => ((occurrence._2._1, occurrence._2._2), 1)) // ((document, word_id), 1)
-      .reduceByKey((x, y) => x + y) // ((document, word_id), count)
+      .reduceByKey(_ + _) // ((document, word_id), count)
       .map(occurrence => (occurrence._1._1, (occurrence._1._2, occurrence._2))) // (document, (word_id, count))
-      .groupByKey() // (document, Iterator[(word_id, count)])
+      .groupByKey // (document, Iterator[(word_id, count)])
       .map(bow => {
       val b = bow._2.toArray.sortBy(v => v._1)
       val words = ListBuffer[Int]()
@@ -273,7 +273,7 @@ object EmailParser {
       // "UH", // interjection
       "VB", "VBD", "VBG", "VBN", "VBP", "VBZ" // Verb forms
     )
-    val stopwords : Set[String] =
+    val stopWords : Set[String] =
       Set(StopAnalyzer.ENGLISH_STOP_WORDS_SET).map(v => v.toString) ++
         Set("", ".", ",",
             "\u2019", "\u2018", "\u2013", "\u2022",
@@ -298,7 +298,7 @@ object EmailParser {
           for (sentence : CoreMap <- sentences) {
             for (token : CoreLabel <- sentence.get(classOf[TokensAnnotation])) {
               val word = token.lemma.toLowerCase
-              if (!stopwords.contains(word) && nlp_tags.contains(token.get(classOf[PartOfSpeechAnnotation]))) {
+              if (!stopWords.contains(word) && nlp_tags.contains(token.get(classOf[PartOfSpeechAnnotation]))) {
                 words += word
               }
             }
@@ -315,8 +315,8 @@ object EmailParser {
       filtered = filtered
         .sortBy(item => item.occurrences, false) // high first
         .zipWithIndex() // index
-        .filter(v => v._2 < keep_n) // keep only indexes smaller than keep_n
-        .map(v => v._1) // remove index
+        .filter(_._2 < keep_n) // keep only indexes smaller than keep_n
+        .map(_._1) // remove index
     }
     filtered.zipWithIndex().map( v => { // reindex
       DictionaryItem(v._2.toInt, v._1.word, v._1.occurrences)
@@ -327,7 +327,7 @@ object EmailParser {
     val uniqueWords = documents
       .flatMap(_.tokens.distinct) // one word per document
       .map((_, 1L)) // one count per word per document
-      .reduceByKey((c1, c2) => c1 + c2) // add up
+      .reduceByKey(_ + _) // add up
       .cache() // for zip with index
 
     uniqueWords
