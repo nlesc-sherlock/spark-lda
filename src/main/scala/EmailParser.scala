@@ -224,23 +224,27 @@ object EmailParser {
       // remove all boundaries
       boundaryRegex.findAllMatchIn(content).foreach(
         m => {
-          parts = parts.flatMap(_.split(Pattern.quote("--" + m.group(1))))
+          parts = parts.flatMap(_.split(Pattern.quote("--" + m.group(1)) + "(--)?\\s*"))
         }
       )
 
       // if the headers are malformed, make sure we don't include any attachments
       // by doing the MIME multipart splitting manually.
-      val body : String = parts.map(part =>
-        // only match text MIME parts
-        textPartRegex.findFirstIn(part) match {
-          case Some(_) => endOfHeader.findFirstMatchIn(part) match {
-            // everything after the header is content
-            case Some(eh) => part.substring(eh.end)
-            case None => "" // there is no end of header
+      val body : String = if (parts.length == 1) {
+        parts(0)
+      } else {
+        parts.map(part =>
+          // only match text MIME parts
+          textPartRegex.findFirstIn(part) match {
+            case Some(_) => endOfHeader.findFirstMatchIn(part) match {
+              // everything after the header is content
+              case Some(eh) => part.substring(eh.end)
+              case None => "" // there is no end of header
+            }
+            case None => "" // content type is not text/*
           }
-          case None => "" // content type is not text/*
-        }
-      ).mkString(" ") // concatenate all text
+        ).mkString(" ") // concatenate all text
+      }
 
       ParsedEmail(raw.id, raw.path, p, body)
     })
