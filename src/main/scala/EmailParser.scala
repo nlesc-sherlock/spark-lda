@@ -251,7 +251,7 @@ object EmailParser {
     // replace <tags>, =D0 mime tags and urls with a space
     val html_pattern = new Regex("<[^<]+?>|=\\d\\d|http\\S+|www\\S+")
     // replace misc symbols with single space
-    val symbol_empty_pattern = new Regex("\\s[-\"`=%><#_~+*/\\\\\\[\\]|{}]+|[-\"`=%><#_~+*/\\\\\\[\\]|{}]+\\s|[\"`=%><#_~+*/\\\\\\[\\]|{}]+")
+    val symbol_empty_pattern = new Regex("\\s[-\\u0001-\\u001f\"`=%><#_~+*/\\\\\\[\\]|{}$]+|[-\\u0001-\\u001f\"`=%><#_~+*/\\\\\\[\\]|{}]+\\s|[\\u0001-\\u001f\"`=%><#_~+*/\\\\\\[\\]|{}$]+")
     // replace by-sentence tokens ,
     val symbol_comma_pattern = new Regex("[();&]+")
     // Don't match 8:00 or 100,000,
