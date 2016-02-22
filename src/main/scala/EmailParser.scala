@@ -1,23 +1,24 @@
-import java.io.{DataOutput, DataInput}
+import java.io.{DataInput, DataOutput}
 import java.util.Properties
-import javax.mail.Session
-import org.apache.commons.mail.util.{MimeMessageUtils, MimeMessageParser}
-import org.apache.hadoop.io.Writable
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.regex.Pattern
+import javax.mail.{Address, Session}
+import javax.mail.internet.AddressException
 
-import scala.util.matching.Regex
-import collection.JavaConversions._
-
-import org.apache.lucene.analysis.core.StopAnalyzer
-
-import scala.collection.mutable.ListBuffer
 import edu.stanford.nlp.ling.CoreAnnotations.{PartOfSpeechAnnotation, SentencesAnnotation, TokensAnnotation}
+import edu.stanford.nlp.ling.CoreLabel
 import edu.stanford.nlp.pipeline.{Annotation, StanfordCoreNLP}
 import edu.stanford.nlp.util.CoreMap
-import edu.stanford.nlp.ling.CoreLabel
+import org.apache.commons.mail.util.{MimeMessageParser, MimeMessageUtils}
+import org.apache.hadoop.io.Writable
+import org.apache.lucene.analysis.core.StopAnalyzer
 import org.apache.spark.rdd.RDD
-import org.apache.spark.{SparkContext, SparkConf}
-
+import org.apache.spark.{SparkConf, SparkContext}
 import scopt.OptionParser
+
+import scala.collection.JavaConversions._
+import scala.collection.mutable.ListBuffer
+import scala.util.matching.Regex
 
 case class DictionaryItem(id: Int, word: String, occurrences: Long)
 case class ParsedEmail(id: Long, path: String, message: MimeMessageParser)
