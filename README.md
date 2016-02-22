@@ -17,7 +17,7 @@ myjar="$(pwd)/build/libs/ScalaLDA-0.1-SNAPSHOT-all.jar"
 
 Then to preprocess email, run:
 ```shell
-spark-submit --class EmailParser $myjar data/email/ data/dic.csv data/bow.csv
+spark-submit --class EmailParser $myjar data/email/ --metadata data/metadata.seq --dictionary data/dic.csv --corpus data/bow.csv
 ```
 
 To run the LDA algorithm on `--k topics`:

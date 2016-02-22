@@ -64,7 +64,7 @@ case class EmailMetadata(var id: Long, var path: String, var message_id: String,
 
 object EmailParser {
   private case class Params(input: String = null,
-                            output: String = null,
+                            corpus: String = null,
                             dictionary: String = null,
                             metadata: String = null,
                             above: Double = 0.5,
@@ -88,22 +88,20 @@ object EmailParser {
       opt[String]("metadata")
         .text("output metadata sequence file with (document id, EmailMetadata)")
         .action((x, c) => c.copy(metadata = x))
+      opt[String]("dictionary")
+        .text("output dictionary file, tab separated. Each line is " +
+          "word_id<TAB>word<TAB>occurrences")
+        .action((x, c) => c.copy(dictionary = x))
+      opt[String]("corpus")
+        .text("plain text output file of one parsed document per line" +
+          "Each text file line holds 1 document. The first line is a comment, the second line is " +
+          "[number of documents]<space>[number of words] and the other lines are ordered as " +
+          "doc_id;word_id_1,...,word_id_n;word_count_1,...,word_count_n")
+        .action((x, c) => c.copy(corpus = x))
       arg[String]("<input>")
         .text("input directory with a number of plain text emails.")
         .required()
         .action((x, c) => c.copy(input = x))
-      arg[String]("<dictionary>")
-        .text("output dictionary file, tab separated. Each line is " +
-          "word_id<TAB>word<TAB>occurrences")
-        .required()
-        .action((x, c) => c.copy(dictionary = x))
-      arg[String]("<output>")
-        .text("plain text output file of one parsed document per line" +
-              "Each text file line holds 1 document. The first line is a comment, the second line is " +
-              "[number of documents]<space>[number of words] and the other lines are ordered as " +
-              "doc_id;word_id_1,...,word_id_n;word_count_1,...,word_count_n")
-        .required()
-        .action((x, c) => c.copy(output = x))
     }
 
     parser.parse(args, defaultParams).map { params =>
@@ -148,31 +146,37 @@ object EmailParser {
         (email.id, EmailMetadata(email.id, email.path, message_id, user, date, from, to, cc, bcc, subject))
       }).saveAsSequenceFile(params.metadata)
     }
+    if (params.dictionary != null || params.corpus != null) {
+      val emailContents = emails.map(email => EmailContents(email.id, email.content))
+      val filtered = filter(emailContents)
+      val tokens = tokenizeStanford(filtered)
+      var dictionary = generateDictionary(tokens)
+      dictionary = filterDictionary(dictionary, params.above, params.below, params.keep_n)
 
-    val filtered = filter(emailContents)
-    val tokens = tokenizeStanford(filtered)
-    var dictionary = generateDictionary(tokens)
-    dictionary = filterDictionary(dictionary, params.above, params.below, params.keep_n)
-    val n_words = dictionary.count()
+      if (params.dictionary != null) {
+        dictionary
+          .sortBy(item => item.id)
+          .map(item => s"${item.id}\t${item.word}\t${item.occurrences}")
+          .saveAsTextFile(params.dictionary)
+      }
 
-    dictionary
-      .sortBy(item => item.id)
-      .map(item => s"${item.id}\t${item.word}\t${item.occurrences}")
-      .saveAsTextFile(params.dictionary)
-
-    val bow = bagOfWords(tokens, dictionary)
-    val n_docs = bow.count()
-    bow
-      .sortBy(d => d.id)
-      .map(d => s"${d.id};${d.words.mkString(",")};${d.counts.mkString(",")}") // stringify
-      .mapPartitionsWithIndex((idx, iter) => { // prepend header
-        if (idx == 0) {
-          Array[String]("# comment", s"${n_words} ${n_docs}").iterator ++ iter
-        } else {
-          iter
-        }
-      })
-      .saveAsTextFile(params.output) // write
+      if (params.corpus != null) {
+        val n_words = dictionary.count()
+        val bow = bagOfWords(tokens, dictionary)
+        val n_docs = bow.count()
+        bow
+          .sortBy(d => d.id)
+          .map(d => s"${d.id};${d.words.mkString(",")};${d.counts.mkString(",")}") // stringify
+          .mapPartitionsWithIndex((idx, iter) => {
+          // prepend header
+          if (idx == 0) {
+            Array[String]("# comment", s"$n_words $n_docs").iterator ++ iter
+          } else {
+            iter
+          }
+        }).saveAsTextFile(params.corpus) // write
+      }
+    }
   }
 
   def bagOfWords(tokens : RDD[TokenizedDocument], dictionary : RDD[DictionaryItem]): RDD[BagOfWords] = {
