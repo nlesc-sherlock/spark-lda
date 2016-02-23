@@ -1,6 +1,5 @@
 import java.io.{DataInput, DataOutput}
 import java.util.Properties
-import java.util.concurrent.atomic.AtomicInteger
 import java.util.regex.Pattern
 import javax.mail.{Address, Session}
 import javax.mail.internet.AddressException
@@ -13,15 +12,16 @@ import org.apache.commons.mail.util.{MimeMessageParser, MimeMessageUtils}
 import org.apache.hadoop.io.Writable
 import org.apache.lucene.analysis.core.StopAnalyzer
 import org.apache.spark.rdd.RDD
+import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{SparkConf, SparkContext}
 import scopt.OptionParser
 
 import scala.collection.JavaConversions._
-import scala.collection.mutable.ListBuffer
+import scala.collection.mutable.ArrayBuffer
 import scala.util.matching.Regex
 
 case class DictionaryItem(id: Int, word: String, occurrences: Long)
-case class ParsedEmail(id: Long, path: String, message: MimeMessageParser, content: String)
+case class ParsedEmail(id: Long, path: String, message: MimeMessageParser)
 case class EmailContents(id: Long, contents: String)
 case class TokenizedDocument(id: Long, tokens: Array[String])
 case class RawDocument(id: Long, path: String, document: String)
@@ -45,7 +45,7 @@ case class EmailMetadata(var id: Long, var path: String, var message_id: String,
   private def readUTFArray(in: DataInput): Array[String] = Array[String]().padTo(in.readInt, null).map(v => in.readUTF)
   private def writeUTFArray(out: DataOutput, arr: Array[String]): Unit = {
     out.writeInt(arr.length)
-    arr.foreach(out.writeUTF(_))
+    arr.foreach(f = out.writeUTF)
   }
 
   override def readFields(in: DataInput): Unit = {
@@ -104,10 +104,9 @@ object EmailParser {
         .action((x, c) => c.copy(input = x))
     }
 
-    parser.parse(args, defaultParams).map { params =>
-      run(params)
-    }.getOrElse {
-      sys.exit(1)
+    parser.parse(args, defaultParams) match {
+      case Some(params) => run(params)
+      case None => sys.exit(1)
     }
   }
   def run(params: Params) = {
@@ -126,32 +125,16 @@ object EmailParser {
       .zipWithIndex()
       .map(v => RawDocument(v._2, v._1._1, v._1._2))
 
-    val emails = parseEmail(documents)
+    val (metadata, tokens) = parseEmail(documents)
 
     if (params.metadata != null) {
-      emails.map(email => {
-        var date = email.message.getMimeMessage.getSentDate
-        if (date == null) {
-          date = email.message.getMimeMessage.getReceivedDate
-        }
-        val split_path = email.path.split("[/\\\\]")
-        // This is purely a heuristic, a user may not be the first element of the path.
-        val user = if (split_path(0) == ".") split_path(1) else split_path(0)
-        val from = try { email.message.getFrom } catch { case _ : AddressException => "" }
-        val to = try { getAddresses(email.message.getTo) } catch { case _ : AddressException => Array[String]() }
-        val cc = try { getAddresses(email.message.getCc) } catch { case _ : AddressException => Array[String]() }
-        val bcc = try { getAddresses(email.message.getBcc) } catch { case _ : AddressException => Array[String]() }
-        val subject = email.message.getSubject
-        val message_id = email.message.getMimeMessage.getMessageID
-        (email.id, EmailMetadata(email.id, email.path, message_id, user, date, from, to, cc, bcc, subject))
-      }).saveAsSequenceFile(params.metadata)
+      metadata.map(metadata => (metadata.id, metadata)).saveAsSequenceFile(params.metadata)
     }
+
     if (params.dictionary != null || params.corpus != null) {
-      val emailContents = emails.map(email => EmailContents(email.id, email.content))
-      val filtered = filter(emailContents)
-      val tokens = tokenizeStanford(filtered)
       var dictionary = generateDictionary(tokens)
       dictionary = filterDictionary(dictionary, params.above, params.below, params.keep_n)
+        .cache()
 
       if (params.dictionary != null) {
         dictionary
@@ -161,18 +144,18 @@ object EmailParser {
       }
 
       if (params.corpus != null) {
+        val bow = bagOfWords(tokens, dictionary).cache()
         val n_words = dictionary.count()
-        val bow = bagOfWords(tokens, dictionary)
         val n_docs = bow.count()
         bow
           .sortBy(d => d.id)
           .map(d => s"${d.id};${d.words.mkString(",")};${d.counts.mkString(",")}") // stringify
-          .mapPartitionsWithIndex((idx, iter) => {
+          .mapPartitionsWithIndex((idx, iterator) => {
           // prepend header
           if (idx == 0) {
-            Array[String]("# comment", s"$n_words $n_docs").iterator ++ iter
+            Array[String]("# comment", s"$n_words $n_docs").iterator ++ iterator
           } else {
-            iter
+            iterator
           }
         }).saveAsTextFile(params.corpus) // write
       }
@@ -189,9 +172,9 @@ object EmailParser {
       .map(occurrence => (occurrence._1._1, (occurrence._1._2, occurrence._2))) // (document, (word_id, count))
       .groupByKey // (document, Iterator[(word_id, count)])
       .map(bow => {
-      val b = bow._2.toArray.sortBy(v => v._1)
-      val words = ListBuffer[Int]()
-      val counts = ListBuffer[Int]()
+      val b = bow._2.toArray.sortBy(_._1)
+      val words = ArrayBuffer[Int]()
+      val counts = ArrayBuffer[Int]()
       for ((word_id, count) <- b) {
         words.append(word_id)
         counts.append(count)
@@ -199,7 +182,46 @@ object EmailParser {
       BagOfWords(bow._1, words.toArray, counts.toArray)
     })
   }
-  def parseEmail(data: RDD[RawDocument]) : RDD[ParsedEmail] = {
+
+  def parseEmail(data: RDD[RawDocument]) : (RDD[EmailMetadata], RDD[TokenizedDocument]) = {
+    val emails = data.map( raw => {
+      val s : Session = Session.getDefaultInstance(new Properties())
+      val m = MimeMessageUtils.createMimeMessage(s, raw.document)
+      val p = new MimeMessageParser(m)
+      p.parse()
+      ParsedEmail(raw.id, raw.path, p)
+    }).cache()
+
+    val metadata = emails.map(email => {
+      var date = email.message.getMimeMessage.getSentDate
+      if (date == null) {
+        date = email.message.getMimeMessage.getReceivedDate
+      }
+      val split_path = email.path.split("[/\\\\]")
+      // This is purely a heuristic, a user may not be the first element of the path.
+      val user = if (split_path(0) == ".") split_path(1) else split_path(0)
+      val from = try { email.message.getFrom } catch { case _ : AddressException => "" }
+      val to = try { getAddresses(email.message.getTo) } catch { case _ : AddressException => Array[String]() }
+      val cc = try { getAddresses(email.message.getCc) } catch { case _ : AddressException => Array[String]() }
+      val bcc = try { getAddresses(email.message.getBcc) } catch { case _ : AddressException => Array[String]() }
+      val subject = email.message.getSubject
+      val message_id = email.message.getMimeMessage.getMessageID
+      EmailMetadata(email.id, email.path, message_id, user, date, from, to, cc, bcc, subject)
+    })
+    val emailContents = emails.map(email => {
+      val msg = email.message
+      EmailContents(email.id,
+        if (msg.hasPlainContent) msg.getPlainContent
+        else if (msg.hasHtmlContent) msg.getHtmlContent
+        else "")
+    })
+    val filtered = filter(fixMalformedMime(emailContents))
+    val tokens = tokenizeStanford(filtered).persist(StorageLevel.MEMORY_AND_DISK)
+    emails.unpersist()
+    (metadata, tokens)
+  }
+
+  def fixMalformedMime(emails: RDD[EmailContents]) : RDD[EmailContents] = {
     // Regular expressions for custom MIME parsing (due to malformed headers)
     val boundaryRegex = new Regex("Content-Type: (?i)(?:multipart)/.*;\\s*boundary=\"(.*)\"")
     val textPartRegex = new Regex("Content-Type: ((?i)(?:text)/)")
@@ -207,46 +229,32 @@ object EmailParser {
     // \r\r but since we already have a malformed header, we accept any line endings.
     val endOfHeader = new Regex("\\n{2}|\\r{2}|(\\n\\r){2}|(\\r\\n){2}")
 
-    data.map( raw => {
-      val s : Session = Session.getDefaultInstance(new Properties())
-      val m = MimeMessageUtils.createMimeMessage(s, raw.document)
-      val p = new MimeMessageParser(m)
-      p.parse()
-
-      val content = if (p.hasPlainContent) {
-        p.getPlainContent
-      } else if (p.hasHtmlContent) {
-        p.getHtmlContent
-      } else ""
-
-      var parts = Array[String](content)
+    emails.map(email => {
+      var parts = Array[String](email.contents)
 
       // remove all boundaries
-      boundaryRegex.findAllMatchIn(content).foreach(
-        m => {
-          parts = parts.flatMap(_.split(Pattern.quote("--" + m.group(1)) + "(--)?\\s*"))
-        }
+      boundaryRegex.findAllMatchIn(email.contents).foreach(
+        m => { parts = parts.flatMap(_.split(Pattern.quote("--" + m.group(1)) + "(--)?\\s*")) }
       )
 
       // if the headers are malformed, make sure we don't include any attachments
       // by doing the MIME multipart splitting manually.
-      val body : String = if (parts.length == 1) {
-        parts(0)
-      } else {
-        parts.map(part =>
-          // only match text MIME parts
-          textPartRegex.findFirstIn(part) match {
-            case Some(_) => endOfHeader.findFirstMatchIn(part) match {
-              // everything after the header is content
-              case Some(eh) => part.substring(eh.end)
-              case None => "" // there is no end of header
+      EmailContents(email.id,
+        if (parts.length == 1) {
+          parts(0)
+        } else {
+          parts.map(part =>
+            // only match text MIME parts
+            textPartRegex.findFirstIn(part) match {
+              case Some(_) => endOfHeader.findFirstMatchIn(part) match {
+                // everything after the header is content
+                case Some(eh) => part.substring(eh.end)
+                case None => "" // there is no end of header
+              }
+              case None => "" // content type is not text/*
             }
-            case None => "" // content type is not text/*
-          }
-        ).mkString(" ") // concatenate all text
-      }
-
-      ParsedEmail(raw.id, raw.path, p, body)
+          ).mkString(" ") // concatenate all text
+        })
     })
   }
 
@@ -301,7 +309,7 @@ object EmailParser {
       // "IN", //conjunction
       "JJ",  // adjectives -- // "JJR", "JJS",
       // "MD", // Modal verb
-        "NN", "NNP", "NNPS", "NNS",  // Nouns
+      "NN", "NNP", "NNPS", "NNS",  // Nouns
       // "PRP", // Pronouns -- // "PRP$",
       "RB",  // adverb
       "RP",  // adverb
@@ -313,8 +321,8 @@ object EmailParser {
     val stopWords : Set[String] =
       Set(StopAnalyzer.ENGLISH_STOP_WORDS_SET).map(v => v.toString) ++
         Set("", ".", ",",
-            "\u2019", "\u2018", "\u2013", "\u2022",
-            "\u2014", "\uf02d", "\u20ac", "\u2026")
+          "\u2019", "\u2018", "\u2013", "\u2022",
+          "\u2014", "\uf02d", "\u20ac", "\u2026")
 
     val props : Properties = new Properties
     props.setProperty("annotators", "tokenize, ssplit, pos, lemma")
@@ -331,7 +339,7 @@ object EmailParser {
           pipeline.annotate(document)
           val sentences : java.util.List[CoreMap] = document.get(classOf[SentencesAnnotation])
 
-          var words = new ListBuffer[String]
+          var words = new ArrayBuffer[String]
           for (sentence : CoreMap <- sentences) {
             for (token : CoreLabel <- sentence.get(classOf[TokensAnnotation])) {
               val word = token.lemma.toLowerCase
@@ -350,7 +358,7 @@ object EmailParser {
     var filtered = dic.filter(item => item.occurrences <= max && item.occurrences >= below)
     if (filtered.count() > keep_n) {
       filtered = filtered
-        .sortBy(item => item.occurrences, false) // high first
+        .sortBy(item => item.occurrences, ascending = false) // high first
         .zipWithIndex() // index
         .filter(_._2 < keep_n) // keep only indexes smaller than keep_n
         .map(_._1) // remove index
@@ -370,7 +378,6 @@ object EmailParser {
     uniqueWords
       .zipWithIndex() // give each word a unique index
       .map(v => DictionaryItem(v._2.toInt, v._1._1, v._1._2)) // map it to the correct format
-      .cache() // for later use
   }
 
   def getAddresses(list : java.util.List[Address]) : Array[String] = {
