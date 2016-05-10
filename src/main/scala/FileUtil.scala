@@ -4,12 +4,12 @@ import org.apache.spark.SparkContext
 
 object FileUtil {
   def saveAsCsv(sc: SparkContext, filename: String, matrix: Matrix) = {
-    sc.makeRDD(Range(0, matrix.numCols), 1)
+    sc.makeRDD(Range(0, matrix.numRows), 1)
       .map(i => {
         var str = ""
-        for (j : Int <- Range(0, matrix.numRows)) {
+        for (j : Int <- Range(0, matrix.numCols)) {
           if (j > 0) str += ","
-          str += matrix(j, i)
+          str += matrix(i, j)
         }
         str
       })
