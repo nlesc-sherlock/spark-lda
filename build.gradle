@@ -11,7 +11,7 @@ ext {
   scalaVersion = '2.10'
   sparkVersion = '1.6.0'
 }
-sourceCompatibility = '1.7'
+sourceCompatibility = '1.8'
 
 repositories {
     mavenCentral()
