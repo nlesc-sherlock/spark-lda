@@ -1,23 +1,23 @@
-import java.io.{DataInput, DataOutput}
-import java.util.Properties
+import java.time.format.DateTimeFormatter
 import java.util.regex.Pattern
+import java.util.{Locale, Properties}
 import javax.mail.{Address, Session}
-import javax.mail.internet.AddressException
 
 import edu.stanford.nlp.ling.CoreAnnotations.{PartOfSpeechAnnotation, SentencesAnnotation, TokensAnnotation}
 import edu.stanford.nlp.ling.CoreLabel
 import edu.stanford.nlp.pipeline.{Annotation, StanfordCoreNLP}
 import edu.stanford.nlp.util.CoreMap
 import org.apache.commons.mail.util.{MimeMessageParser, MimeMessageUtils}
-import org.apache.hadoop.io.Writable
 import org.apache.lucene.analysis.core.StopAnalyzer
 import org.apache.spark.rdd.RDD
+import org.apache.spark.sql.SQLContext
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{SparkConf, SparkContext}
 import scopt.OptionParser
 
 import scala.collection.JavaConversions._
 import scala.collection.mutable.ArrayBuffer
+import scala.util.control.Exception.allCatch
 import scala.util.matching.Regex
 
 case class DictionaryItem(id: Int, word: String, occurrences: Long)
@@ -26,41 +26,9 @@ case class EmailContents(id: Long, contents: String)
 case class TokenizedDocument(id: Long, tokens: Array[String])
 case class RawDocument(id: Long, path: String, document: String)
 case class BagOfWords(id: Long, words: Array[Int], counts: Array[Int])
-case class EmailMetadata(var id: Long, var path: String, var message_id: String, var user: String,
-                         var date: java.util.Date, var from: String, var to: Array[String], var cc: Array[String],
-                         var bcc: Array[String], var subject: String) extends Writable {
-  override def write(out: DataOutput): Unit = {
-    out.writeLong(id)
-    out.writeUTF(path)
-    out.writeUTF(message_id)
-    out.writeUTF(user)
-    out.writeLong(date.getTime)
-    out.writeUTF(from)
-    writeUTFArray(out, to)
-    writeUTFArray(out, cc)
-    writeUTFArray(out, bcc)
-    out.writeUTF(subject)
-  }
-
-  private def readUTFArray(in: DataInput): Array[String] = Array[String]().padTo(in.readInt, null).map(v => in.readUTF)
-  private def writeUTFArray(out: DataOutput, arr: Array[String]): Unit = {
-    out.writeInt(arr.length)
-    arr.foreach(f = out.writeUTF)
-  }
-
-  override def readFields(in: DataInput): Unit = {
-    id = in.readLong
-    path = in.readUTF
-    message_id = in.readUTF
-    user = in.readUTF
-    date = new java.util.Date(in.readLong)
-    from = in.readUTF
-    to = readUTFArray(in)
-    cc = readUTFArray(in)
-    bcc = readUTFArray(in)
-    subject = in.readUTF
-  }
-}
+case class EmailMetadata(var id: Long, var path: String, var message_id: String,
+                         var date: String, var from: String, var to: Array[String], var cc: Array[String],
+                         var bcc: Array[String], var subject: String, var references: Array[String])
 
 object EmailParser {
   private case class Params(input: String = null,
@@ -70,6 +38,8 @@ object EmailParser {
                             above: Double = 0.5,
                             below: Int = 5,
                             keep_n: Int = 1000000)
+
+  val emailDateFormatter = DateTimeFormatter.ofPattern("EEE, d MMM yyyy HH:mm:ss X (z)", Locale.US)
 
   def main(args: Array[String]) {
     val defaultParams = Params()
@@ -86,7 +56,7 @@ object EmailParser {
         .text(s"keep the n most frequent words, after the previous step. default: ${defaultParams.keep_n}")
         .action((x, c) => c.copy(keep_n = x))
       opt[String]("metadata")
-        .text("output metadata sequence file with (document id, EmailMetadata)")
+        .text("output metadata Avro file with EmailMetadata")
         .action((x, c) => c.copy(metadata = x))
       opt[String]("dictionary")
         .text("output dictionary file, tab separated. Each line is " +
@@ -99,7 +69,7 @@ object EmailParser {
           "doc_id;word_id_1,...,word_id_n;word_count_1,...,word_count_n")
         .action((x, c) => c.copy(corpus = x))
       arg[String]("<input>")
-        .text("input directory with a number of plain text emails.")
+        .text("input sequence file containing tuples of (path, plain text email content).")
         .required()
         .action((x, c) => c.copy(input = x))
     }
@@ -113,7 +83,6 @@ object EmailParser {
     // Look at configuration to determine parallelism and run node
     val conf = new SparkConf()
       .setAppName("EmailParser")
-      .set("spark.default.parallelism", "8")
     val sc = new SparkContext(conf)
 
     // Sequence file of path -> contents
@@ -125,13 +94,19 @@ object EmailParser {
       .zipWithIndex()
       .map(v => RawDocument(v._2, v._1._1, v._1._2))
 
-    val (metadata, tokens) = parseEmail(documents)
+    val (metadataOption, tokensOption) = parseEmail(documents,
+                                                    params.metadata != null,
+                                                    params.dictionary != null || params.corpus != null)
 
-    if (params.metadata != null) {
-      metadata.map(metadata => (metadata.id, metadata)).saveAsSequenceFile(params.metadata)
-    }
+    metadataOption.foreach(metadata => {
+      val sqlContext = new SQLContext(sc)
+      import sqlContext.implicits._
+      metadata.toDF().write
+        .format("com.databricks.spark.avro")
+        .save(params.metadata)
+    })
 
-    if (params.dictionary != null || params.corpus != null) {
+    tokensOption.foreach(tokens => {
       var dictionary = generateDictionary(tokens)
       dictionary = filterDictionary(dictionary, params.above, params.below, params.keep_n)
         .cache()
@@ -159,7 +134,7 @@ object EmailParser {
           }
         }).saveAsTextFile(params.corpus) // write
       }
-    }
+    })
   }
 
   def bagOfWords(tokens : RDD[TokenizedDocument], dictionary : RDD[DictionaryItem]): RDD[BagOfWords] = {
@@ -183,7 +158,7 @@ object EmailParser {
     })
   }
 
-  def parseEmail(data: RDD[RawDocument]) : (RDD[EmailMetadata], RDD[TokenizedDocument]) = {
+  def parseEmail(data: RDD[RawDocument], parseMetadata : Boolean, parseTokens : Boolean) : (Option[RDD[EmailMetadata]], Option[RDD[TokenizedDocument]]) = {
     val emails = data.map( raw => {
       val s : Session = Session.getDefaultInstance(new Properties())
       val m = MimeMessageUtils.createMimeMessage(s, raw.document)
@@ -192,31 +167,41 @@ object EmailParser {
       ParsedEmail(raw.id, raw.path, p)
     }).cache()
 
-    val metadata = emails.map(email => {
-      var date = email.message.getMimeMessage.getSentDate
-      if (date == null) {
-        date = email.message.getMimeMessage.getReceivedDate
+    val metadata = Option(parseMetadata).collect {
+      case true => emails.map(email => {
+        val from = allCatch.opt(email.message.getFrom) getOrElse ""
+        val to = allCatch.opt(getAddresses(email.message.getTo)) getOrElse Array[String]()
+        val cc = allCatch.opt(getAddresses(email.message.getCc)) getOrElse Array[String]()
+        val bcc = allCatch.opt(getAddresses(email.message.getBcc)) getOrElse Array[String]()
+        val subject = allCatch.opt(email.message.getSubject) getOrElse ""
+
+        var date = ""
+        var references = Array[String]()
+        var message_id = ""
+        allCatch.opt(email.message.getMimeMessage).foreach(mimeMessage => {
+          date = Option(mimeMessage.getHeader("Date", null))
+            .flatMap(d => allCatch.opt(emailDateFormatter.parse(d)))
+            .map(DateTimeFormatter.ISO_OFFSET_DATE_TIME.format) getOrElse ""
+          references = Option(mimeMessage.getHeader("References")) getOrElse Array[String]()
+          message_id = Option(mimeMessage.getMessageID) getOrElse ""
+        })
+        EmailMetadata(email.id, email.path, message_id, date, from, to, cc, bcc, subject, references)
+      })
+    }
+
+    val tokens = Option(parseTokens).collect {
+      case true => {
+        val emailContents = emails.map(email => {
+          val msg = email.message
+          EmailContents(email.id,
+            if (msg.hasPlainContent) msg.getPlainContent
+            else if (msg.hasHtmlContent) msg.getHtmlContent
+            else "")
+        })
+        val filtered = filter(fixMalformedMime(emailContents))
+        tokenizeStanford(filtered).persist(StorageLevel.MEMORY_AND_DISK)
       }
-      val split_path = email.path.split("[/\\\\]")
-      // This is purely a heuristic, a user may not be the first element of the path.
-      val user = if (split_path(0) == ".") split_path(1) else split_path(0)
-      val from = try { email.message.getFrom } catch { case _ : AddressException => "" }
-      val to = try { getAddresses(email.message.getTo) } catch { case _ : AddressException => Array[String]() }
-      val cc = try { getAddresses(email.message.getCc) } catch { case _ : AddressException => Array[String]() }
-      val bcc = try { getAddresses(email.message.getBcc) } catch { case _ : AddressException => Array[String]() }
-      val subject = email.message.getSubject
-      val message_id = email.message.getMimeMessage.getMessageID
-      EmailMetadata(email.id, email.path, message_id, user, date, from, to, cc, bcc, subject)
-    })
-    val emailContents = emails.map(email => {
-      val msg = email.message
-      EmailContents(email.id,
-        if (msg.hasPlainContent) msg.getPlainContent
-        else if (msg.hasHtmlContent) msg.getHtmlContent
-        else "")
-    })
-    val filtered = filter(fixMalformedMime(emailContents))
-    val tokens = tokenizeStanford(filtered).persist(StorageLevel.MEMORY_AND_DISK)
+    }
     emails.unpersist()
     (metadata, tokens)
   }
